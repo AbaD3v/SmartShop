@@ -1,11 +1,14 @@
-export type Branch = {
+export interface Branch {
   id: string;
   name: string;
   address: string;
+  city: string;
   latitude: number;
   longitude: number;
   phone?: string;
-};
+  work_hours?: string; // ✅ добавляем
+  created_at?: string;
+}
 
 export type CatalogVariant = {
   variant_id: string;
