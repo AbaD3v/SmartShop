@@ -10,19 +10,25 @@ export interface Branch {
   created_at?: string;
 }
 
-export type CatalogVariant = {
+export interface CatalogVariant {
   variant_id: string;
   product_id: string;
-  slug: string;
   brand: string;
-  title: string;
-  description?: string;
-  image_url?: string;
+  product_name: string;
+  title: string; // если добавил в view
+  description: string | null;
+  base_image_url: string | null;
+
   color: string;
+  storage_gb: number;
   memory_gb: number;
   price_kzt: number;
+  sku: string;
+  image_url: string | null;
+
   is_active: boolean;
-};
+  product_is_active: boolean;
+}
 
 export type CartItem = {
   variant_id: string;
