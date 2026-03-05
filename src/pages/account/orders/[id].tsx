@@ -60,7 +60,7 @@ function statusChip(statusRaw: string | null | undefined) {
     return { label: "Отменён", cls: "bg-rose-50 text-rose-700 ring-rose-200/60", Icon: AlertTriangle };
   }
   if (["processing", "in_progress", "packing"].includes(s)) {
-    return { label: "В работе", cls: "bg-sky-50 text-sky-700 ring-sky-200/60", Icon: Clock };
+    return { label: "В процессе", cls: "bg-sky-50 text-sky-700 ring-sky-200/60", Icon: Clock };
   }
   return { label: "Ожидает", cls: "bg-amber-50 text-amber-700 ring-amber-200/60", Icon: Clock };
 }
