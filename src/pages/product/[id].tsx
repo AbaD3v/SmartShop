@@ -74,7 +74,7 @@ export default function ProductPage() {
     toastTimerRef.current = window.setTimeout(() => setToast(null), 2600);
   };
 
-  const load = async (idFromRoute: string) => {
+const load = async (idFromRoute: string) => {
   setLoading(true);
   setToast(null);
 
@@ -83,40 +83,35 @@ export default function ProductPage() {
   abortRef.current = controller;
 
   try {
-    // Пробуем как productId (как сейчас)
-    const res = await fetch(
-      `/api/catalog/products?productId=${encodeURIComponent(idFromRoute)}`,
-      { signal: controller.signal }
-    );
+    // ✅ Новый универсальный API
+    const res = await fetch(`/api/product/${encodeURIComponent(idFromRoute)}`, {
+      signal: controller.signal,
+    });
 
-    const json = await res.json().catch(() => ({}));
-    const list = normalizeList(json);
-
-    // 1) Если id — это product_id
-    let filtered = list.filter((x) => String(x.product_id) === String(idFromRoute));
-
-    // 2) Если не нашли — значит id может быть variant_id
-    if (filtered.length === 0) {
-      filtered = list.filter((x) => String(x.variant_id) === String(idFromRoute));
+    if (res.status === 404) {
+      setVariants([]);
+      setSelectedId(null);
+      setLoading(false);
+      return;
     }
 
-    // 3) Если всё ещё 0 — fallback: возможно API вернул весь каталог без фильтра,
-    // тогда попробуем вытащить по обоим полям прямо из list:
-    if (filtered.length === 0) {
-      const byProduct = list.find((x) => String(x.product_id) === String(idFromRoute));
-      const byVariant = list.find((x) => String(x.variant_id) === String(idFromRoute));
-
-      if (byProduct) filtered = list.filter((x) => String(x.product_id) === String(idFromRoute));
-      if (byVariant) filtered = list.filter((x) => String(x.product_id) === String(byVariant.product_id));
+    if (!res.ok) {
+      throw new Error("API error");
     }
 
-    setVariants(filtered);
+    const json = await res.json();
 
-    // Выбор варианта:
-    // - если url был variant_id → выбираем именно его
-    // - иначе выбираем первый вариант
-    const exactVariant = filtered.find((v) => String(v.variant_id) === String(idFromRoute));
-    setSelectedId(exactVariant?.variant_id ?? filtered[0]?.variant_id ?? null);
+    const list = Array.isArray(json?.variants) ? (json.variants as CatalogVariant[]) : [];
+    setVariants(list);
+
+    // ✅ Выбираем вариант:
+    // 1) если API говорит preferred_variant_id (то есть URL был variant_id)
+    // 2) если в URL был variant_id, который есть в списке
+    // 3) иначе первый
+    const preferred = String(json?.preferred_variant_id ?? "");
+    const exact = list.find((v) => String(v.variant_id) === String(idFromRoute));
+
+    setSelectedId(preferred || exact?.variant_id || list[0]?.variant_id || null);
   } catch (e: any) {
     if (e?.name !== "AbortError") {
       setVariants([]);
