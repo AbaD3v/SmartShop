@@ -1,3 +1,4 @@
+// src/pages/api/orders/create.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { requireUser } from "@/lib/api-auth";
 import { getSupabaseAdmin } from "@/lib/supabase";
@@ -47,9 +48,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     p_customer_phone: customerPhone || null,
   });
 
-  if (rpcErr || !orderId) {
-    return res.status(400).json({ error: rpcErr?.message || "Unable to create order" });
+if (rpcErr || !orderId) {
+  const msg = String(rpcErr?.message ?? "Unable to create order");
+
+  if (msg.toLowerCase().includes("not_enough_inventory")) {
+    return res.status(409).json({
+      error: "NOT_ENOUGH_INVENTORY",
+      message: "Не хватает товара в выбранном филиале. Уменьшите количество или выберите другой филиал.",
+    });
   }
+
+  return res.status(400).json({ error: msg });
+}
 
   // 3) Достаём order + items + branch
   const [

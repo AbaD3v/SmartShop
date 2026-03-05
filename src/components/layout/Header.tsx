@@ -1,26 +1,42 @@
+// src/components/layout/Header.tsx
 import Link from "next/link";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { getSupabaseBrowser } from "@/lib/supabase";
-import { ShoppingBag, User, LogOut, ChevronDown, Menu, X, Search } from "lucide-react";
-import { motion, AnimatePresence } from "framer-motion";
+import {
+  Heart,
+  User2,
+  ShoppingCart,
+  ChevronRight,
+  MapPin,
+  Tag,
+  ShieldCheck,
+  Search,
+  Menu,
+  X,
+  LogOut,
+  ChevronDown,
+  Grid2X2,
+} from "lucide-react";
+import { AnimatePresence, motion } from "framer-motion";
 
-import { Button } from "@/components/ui/Button";
-import { Input } from "@/components/ui/Input";
+type HeaderProps = {
+  showTopBar?: boolean;
+};
 
-export const Header = () => {
+export const Header = ({ showTopBar = true }: HeaderProps) => {
+  const supabase = useMemo(() => getSupabaseBrowser(), []);
+
   const [email, setEmail] = useState<string | null>(null);
   const [cartCount, setCartCount] = useState(0);
+
   const [accountOpen, setAccountOpen] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
+
   const [search, setSearch] = useState("");
 
   const accountRef = useRef<HTMLDivElement | null>(null);
 
-  const loadUserAndCart = async () => {
-    const supabase = getSupabaseBrowser();
-    const { data } = await supabase.auth.getUser();
-    setEmail(data.user?.email ?? null);
-
+  const loadCartCount = async () => {
     try {
       const res = await fetch("/api/cart");
       if (!res.ok) {
@@ -31,8 +47,8 @@ export const Header = () => {
       const items = Array.isArray(json?.items)
         ? json.items
         : Array.isArray(json?.cart?.items)
-        ? json.cart.items
-        : [];
+          ? json.cart.items
+          : [];
       const count = items.reduce((s: number, i: any) => s + (Number(i.quantity) || 0), 0);
       setCartCount(count);
     } catch {
@@ -40,21 +56,21 @@ export const Header = () => {
     }
   };
 
+  const syncUser = async () => {
+    const { data } = await supabase.auth.getUser();
+    const userEmail = data.user?.email ?? null;
+    setEmail(userEmail);
+    if (data.user) await loadCartCount();
+    else setCartCount(0);
+  };
+
   useEffect(() => {
-    const supabase = getSupabaseBrowser();
-
-    const getUser = async () => {
-      const { data } = await supabase.auth.getUser();
-      setEmail(data.user?.email ?? null);
-      if (data.user) loadUserAndCart();
-    };
-
-    getUser();
+    syncUser();
 
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange(() => {
-      getUser();
+      syncUser();
     });
 
     const handleClickOutside = (event: MouseEvent) => {
@@ -68,13 +84,14 @@ export const Header = () => {
       subscription.unsubscribe();
       document.removeEventListener("mousedown", handleClickOutside);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const signOut = async () => {
-    const supabase = getSupabaseBrowser();
     await supabase.auth.signOut();
     setEmail(null);
     setAccountOpen(false);
+    setCartCount(0);
   };
 
   const goSearch = () => {
@@ -85,142 +102,212 @@ export const Header = () => {
 
   return (
     <>
-      <header className="sticky top-0 z-50 border-b border-gray-200/70 bg-white/70 backdrop-blur-xl transition-all duration-300">
-        <div className="mx-auto flex h-[64px] max-w-[1440px] items-center justify-between px-4 sm:px-6 lg:px-8">
-          <div className="flex items-center gap-6">
-            <button
-              className="group relative flex h-10 w-10 items-center justify-center rounded-full text-gray-900 transition-colors hover:bg-gray-100 md:hidden"
-              onClick={() => setMobileOpen(true)}
-              aria-label="Открыть меню"
-            >
-              <Menu size={20} strokeWidth={1.5} />
-            </button>
+      <header className="sticky top-0 z-50 bg-white/80 backdrop-blur-xl">
+        {/* TOP BAR */}
+        {showTopBar && (
+          <div className="border-b border-gray-100">
+            <div className="mx-auto flex h-14 max-w-[1680px] items-center justify-between gap-3 px-6 sm:px-8 lg:px-10">
+              <div className="flex items-center gap-2.5">
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-2 rounded-full bg-gray-100 px-4 py-2 text-[15px] font-semibold text-gray-800 hover:bg-gray-200"
+                >
+                  <MapPin className="h-4.5 w-4.5" />
+                  Астана
+                </button>
 
-            <Link 
-              href="/" 
-              className="text-[19px] font-semibold tracking-[-0.02em] text-gray-900 transition-opacity hover:opacity-70"
-            >
-              SmartShop
-            </Link>
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-2 rounded-full bg-gray-100 px-4 py-2 text-[15px] font-semibold text-gray-800 hover:bg-gray-200"
+                >
+                  Рус
+                  <ChevronRight className="h-4 w-4 opacity-60" />
+                </button>
+              </div>
 
-            <nav className="hidden items-center gap-7 text-[13px] font-medium text-gray-500 md:flex">
-              <Link href="/catalog" className="transition-colors hover:text-gray-900">
-                Каталог
-              </Link>
-              <Link href="/branches" className="transition-colors hover:text-gray-900">
-                Филиалы
-              </Link>
-            </nav>
-          </div>
+              <div className="hidden items-center gap-7 text-[15px] font-semibold text-gray-600 md:flex">
+                <Link className="hover:text-gray-900" href="/branches">
+                  Адреса магазинов
+                </Link>
+                <Link className="hover:text-gray-900" href="/cart">
+                  Корзина
+                </Link>
+                <Link className="hover:text-gray-900" href="/account">
+                 История заказов
+                </Link>
+              </div>
 
-          <div className="hidden max-w-sm flex-1 px-8 md:block">
-            <div className="relative group">
-              <Input
-                uiSize="md"
-                className="w-full !rounded-full border-gray-200/70 bg-gray-50/50 pl-10 text-[13px] ring-offset-transparent transition-all focus:bg-white focus:shadow-[0_0_0_4px_rgba(0,0,0,0.03)]"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && goSearch()}
-                placeholder="Поиск продуктов"
-                leftIcon={<Search size={15} className="text-gray-400 group-focus-within:text-gray-900 transition-colors" />}
-              />
+              <div className="flex items-center gap-3">
+                <Link
+                  href="/favorites"
+                  className="inline-flex items-center gap-2 rounded-full bg-gray-100 px-4 py-2 text-[15px] font-semibold text-gray-800 hover:bg-gray-200"
+                >
+                  <Heart className="h-4.5 w-4.5" />
+                  Избранное
+                </Link>
+              </div>
             </div>
           </div>
+        )}
 
-          <div className="flex items-center gap-3">
-            <motion.div whileTap={{ scale: 0.95 }} className="relative">
+        {/* MAIN HEADER */}
+        <div className="border-b border-gray-100">
+          <div className="mx-auto flex h-[84px] max-w-[1680px] items-center justify-between gap-5 px-6 sm:px-8 lg:px-10">
+            {/* Left */}
+            <div className="flex items-center gap-5">
+              <Link href="/" className="flex items-center gap-3 transition-opacity hover:opacity-90">
+                <div className="grid h-10 w-10 place-items-center rounded-2xl bg-emerald-600 text-white shadow-sm">
+                  <span className="text-[18px] font-black">S</span>
+                </div>
+                <div className="leading-tight">
+                  <div className="text-[15px] font-black tracking-wide text-gray-900">
+                    Smart<span className="text-emerald-600">Shop</span>
+                  </div>
+                  <div className="text-[12px] font-semibold text-gray-500">marketplace</div>
+                </div>
+              </Link>
+
+              <Link
+                href="/catalog"
+                className="hidden items-center gap-2 rounded-2xl bg-emerald-600 px-5 py-2.5 text-[15px] font-black text-white shadow-sm hover:bg-emerald-700 md:inline-flex"
+              >
+                <span className="grid h-7 w-7 place-items-center rounded-xl bg-white/15">
+                  <Grid2X2 className="h-4.5 w-4.5" />
+                </span>
+                Каталог
+              </Link>
+
+              <nav className="hidden items-center gap-8 text-[15px] font-semibold text-gray-600 lg:flex">
+                <Link href="/branches" className="transition-colors hover:text-emerald-600">
+                  Адреса магазинов
+                </Link>
+              </nav>
+            </div>
+
+            {/* Center: Search */}
+            <div className="hidden flex-1 md:block">
+              <div className="relative">
+                <Search className="absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-gray-400" />
+                <input
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && goSearch()}
+                  placeholder="Поиск по моделям iPhone, Samsung…"
+                  className="h-12 w-full rounded-2xl bg-gray-100 pl-12 pr-4 text-[15px] font-semibold outline-none placeholder:text-gray-400 focus:bg-gray-50 focus:ring-2 focus:ring-emerald-600/15"
+                />
+              </div>
+            </div>
+
+            {/* Right */}
+            <div className="flex items-center gap-2.5">
+              {/* Mobile search */}
+              <button
+                type="button"
+                className="grid h-12 w-12 place-items-center rounded-2xl bg-gray-100 text-gray-700 hover:bg-gray-200 md:hidden"
+                aria-label="Поиск"
+                onClick={goSearch}
+              >
+                <Search className="h-5 w-5" />
+              </button>
+
+              <Link
+                href="/favorites"
+                className="grid h-12 w-12 place-items-center rounded-2xl bg-gray-100 hover:bg-gray-200"
+                aria-label="Избранное"
+              >
+                <Heart className="h-5 w-5 text-emerald-600" />
+              </Link>
+
               <Link
                 href="/cart"
-                className="flex h-10 w-10 items-center justify-center rounded-full text-gray-900 transition-colors hover:bg-gray-100"
+                className="relative grid h-12 w-12 place-items-center rounded-2xl bg-gray-100 hover:bg-gray-200"
                 aria-label="Корзина"
               >
-                <ShoppingBag size={19} strokeWidth={1.5} />
+                <ShoppingCart className="h-5 w-5 text-emerald-600" />
                 <AnimatePresence>
                   {cartCount > 0 && (
                     <motion.span
-                      key={cartCount}
-                      initial={{ scale: 0.5, opacity: 0 }}
+                      initial={{ scale: 0.6, opacity: 0 }}
                       animate={{ scale: 1, opacity: 1 }}
-                      exit={{ scale: 0.5, opacity: 0 }}
-                      className="absolute right-[2px] top-[2px] flex h-4 min-w-[16px] items-center justify-center rounded-full bg-blue-600 px-1 text-[9px] font-bold text-white shadow-sm"
+                      exit={{ scale: 0.6, opacity: 0 }}
+                      className="absolute -right-1 -top-1 flex h-6 min-w-[24px] items-center justify-center rounded-full bg-emerald-600 px-2 text-[11px] font-black text-white shadow-sm ring-2 ring-white"
                     >
-                      {cartCount > 99 ? "99+" : cartCount}
+                      {cartCount}
                     </motion.span>
                   )}
                 </AnimatePresence>
               </Link>
-            </motion.div>
 
-            {email ? (
-              <div className="relative" ref={accountRef}>
-                <button
-                  onClick={() => setAccountOpen((v) => !v)}
-                  className="flex h-10 items-center gap-2 rounded-full border border-gray-200/70 bg-white pl-1 pr-3 transition-all hover:bg-gray-50 hover:shadow-sm"
-                >
-                  <div className="flex h-8 w-8 items-center justify-center rounded-full bg-gray-100 text-gray-600">
-                    <User size={15} strokeWidth={2} />
-                  </div>
-                  <span className="max-w-[120px] truncate text-[13px] font-medium text-gray-700">
-                    {email.split("@")[0]}
-                  </span>
-                  <ChevronDown 
-                    size={14} 
-                    className={`text-gray-400 transition-transform duration-200 ${accountOpen ? "rotate-180" : ""}`} 
-                  />
-                </button>
-
-                <AnimatePresence>
-                  {accountOpen && (
-                    <motion.div
-                      initial={{ opacity: 0, y: 10, scale: 0.95 }}
-                      animate={{ opacity: 1, y: 0, scale: 1 }}
-                      exit={{ opacity: 0, y: 10, scale: 0.95 }}
-                      transition={{ duration: 0.15, ease: "easeOut" }}
-                      className="absolute right-0 mt-2 w-56 overflow-hidden rounded-[20px] border border-gray-200/80 bg-white p-1.5 shadow-[0_10px_40px_-10px_rgba(0,0,0,0.1)] backdrop-blur-xl"
-                    >
-                      <Link
-                        href="/account"
-                        className="flex items-center rounded-[14px] px-3 py-2.5 text-[13px] font-medium text-gray-700 transition-colors hover:bg-gray-50"
-                        onClick={() => setAccountOpen(false)}
-                      >
-                        Аккаунт
-                      </Link>
-                      <Link
-                        href="/account/orders"
-                        className="flex items-center rounded-[14px] px-3 py-2.5 text-[13px] font-medium text-gray-700 transition-colors hover:bg-gray-50"
-                        onClick={() => setAccountOpen(false)}
-                      >
-                        Мои заказы
-                      </Link>
-                      <div className="my-1 h-px bg-gray-100" />
-                      <button
-                        type="button"
-                        onClick={signOut}
-                        className="flex w-full items-center gap-2 rounded-[14px] px-3 py-2.5 text-[13px] font-medium text-red-500 transition-colors hover:bg-red-50"
-                      >
-                        <LogOut size={14} />
-                        Выйти
-                      </button>
-                    </motion.div>
-                  )}
-                </AnimatePresence>
-              </div>
-            ) : (
-              <div className="hidden md:block">
-                <Link href="/auth">
-                  <Button 
-                    variant="secondary" 
-                    className="h-10 !rounded-full bg-black px-5 text-[13px] font-medium text-white hover:bg-gray-800"
+              {email ? (
+                <div className="relative" ref={accountRef}>
+                  <button
+                    onClick={() => setAccountOpen((v) => !v)}
+                    className="flex items-center gap-2.5 rounded-2xl bg-gray-100 p-1 pr-3.5 text-gray-900 hover:bg-gray-200"
+                    aria-label="Аккаунт"
                   >
-                    Войти
-                  </Button>
+                    <div className="grid h-10 w-10 place-items-center rounded-2xl bg-white/70 text-emerald-600 ring-1 ring-black/5">
+                      <User2 className="h-5 w-5" />
+                    </div>
+                    <ChevronDown
+                      className={[
+                        "h-4 w-4 text-gray-600 transition-transform",
+                        accountOpen ? "rotate-180" : "",
+                      ].join(" ")}
+                    />
+                  </button>
+
+                  <AnimatePresence>
+                    {accountOpen && (
+                      <motion.div
+                        initial={{ opacity: 0, y: 10, scale: 0.98 }}
+                        animate={{ opacity: 1, y: 0, scale: 1 }}
+                        exit={{ opacity: 0, y: 10, scale: 0.98 }}
+                        className="absolute right-0 mt-3 w-72 overflow-hidden rounded-3xl border border-gray-100 bg-white p-2 shadow-xl ring-1 ring-black/5"
+                      >
+                        <div className="mb-1 border-b border-gray-50 px-4 py-3">
+                          <p className="text-[11px] font-black uppercase tracking-wider text-gray-400">Аккаунт</p>
+                          <p className="truncate text-[14px] font-semibold text-gray-900">{email}</p>
+                        </div>
+
+                        <Link
+                          href="/account"
+                          className="block rounded-2xl px-4 py-3 text-[15px] font-semibold text-gray-700 hover:bg-gray-50 hover:text-emerald-600"
+                          onClick={() => setAccountOpen(false)}
+                        >
+                          Профиль
+                        </Link>
+                        <button
+                          onClick={signOut}
+                          className="mt-1 flex w-full items-center gap-2 rounded-2xl px-4 py-3 text-[15px] font-semibold text-red-500 hover:bg-red-50"
+                        >
+                          <LogOut className="h-4.5 w-4.5" /> Выйти
+                        </button>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </div>
+              ) : (
+                <Link
+                  href="/auth"
+                  className="hidden rounded-2xl bg-emerald-600 px-6 py-3 text-[15px] font-black text-white shadow-sm hover:bg-emerald-700 sm:inline-flex"
+                >
+                  Войти
                 </Link>
-              </div>
-            )}
+              )}
+
+              <button
+                className="grid h-12 w-12 place-items-center rounded-2xl bg-gray-100 text-gray-900 hover:bg-gray-200 lg:hidden"
+                onClick={() => setMobileOpen(true)}
+                aria-label="Открыть меню"
+              >
+                <Menu className="h-5 w-5" />
+              </button>
+            </div>
           </div>
         </div>
       </header>
 
+      {/* Mobile Sidebar */}
       <AnimatePresence>
         {mobileOpen && (
           <>
@@ -228,79 +315,90 @@ export const Header = () => {
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              className="fixed inset-0 z-[60] bg-black/20 backdrop-blur-sm"
+              className="fixed inset-0 z-[60] bg-black/40 backdrop-blur-sm"
               onClick={() => setMobileOpen(false)}
             />
-
             <motion.div
               initial={{ x: "100%" }}
               animate={{ x: 0 }}
               exit={{ x: "100%" }}
-              transition={{ type: "spring", damping: 25, stiffness: 200 }}
-              className="fixed right-0 top-0 z-[70] h-full w-full max-w-[320px] border-l border-gray-100 bg-white/95 p-6 shadow-2xl backdrop-blur-2xl"
+              className="fixed right-0 top-0 z-[70] h-full w-full max-w-[360px] bg-white p-7 shadow-2xl"
             >
               <div className="mb-8 flex items-center justify-between">
-                <span className="text-[17px] font-semibold tracking-tight">Меню</span>
-                <button 
-                  onClick={() => setMobileOpen(false)} 
-                  className="flex h-10 w-10 items-center justify-center rounded-full bg-gray-100 text-gray-900 transition-colors active:scale-95"
+                <span className="text-2xl font-black text-gray-900">Меню</span>
+                <button
+                  onClick={() => setMobileOpen(false)}
+                  className="grid h-11 w-11 place-items-center rounded-full bg-gray-100 hover:bg-gray-200"
+                  aria-label="Закрыть"
                 >
-                  <X size={20} />
+                  <X className="h-5 w-5" />
                 </button>
               </div>
 
-              <div className="mb-8 group">
-                <Input
-                  uiSize="md"
-                  className="!rounded-2xl border-gray-100 bg-gray-50/50"
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      setMobileOpen(false);
-                      goSearch();
-                    }
-                  }}
-                  placeholder="Поиск продуктов..."
-                  leftIcon={<Search size={16} className="text-gray-400" />}
-                />
+              <div className="mb-5">
+                <div className="relative">
+                  <Search className="absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-gray-400" />
+                  <input
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && goSearch()}
+                    placeholder="Поиск…"
+                    className="h-12 w-full rounded-2xl bg-gray-100 pl-12 pr-4 text-[15px] font-semibold outline-none placeholder:text-gray-400 focus:bg-gray-50 focus:ring-2 focus:ring-emerald-600/15"
+                  />
+                </div>
               </div>
 
-              <nav className="flex flex-col gap-1">
-                {[
-                  { label: "Каталог", href: "/catalog" },
-                  { label: "Филиалы", href: "/branches" },
-                  { label: "Корзина", href: "/cart" },
-                  { label: "Аккаунт", href: "/account" },
-                ].map((item) => (
-                  <Link
-                    key={item.href}
-                    href={item.href}
-                    onClick={() => setMobileOpen(false)}
-                    className="flex items-center rounded-2xl px-4 py-3.5 text-[15px] font-medium text-gray-900 transition-colors hover:bg-gray-50 active:bg-gray-100"
-                  >
-                    {item.label}
-                  </Link>
-                ))}
+              <nav className="flex flex-col gap-2 text-[16px] font-semibold">
+                <Link
+                  href="/catalog"
+                  onClick={() => setMobileOpen(false)}
+                  className="rounded-2xl px-5 py-3.5 hover:bg-gray-50"
+                >
+                  Каталог
+                </Link>
+                <Link
+                  href="/branches"
+                  onClick={() => setMobileOpen(false)}
+                  className="rounded-2xl px-5 py-3.5 hover:bg-gray-50"
+                >
+                  Магазины
+                </Link>
+                <Link
+                  href="/delivery"
+                  onClick={() => setMobileOpen(false)}
+                  className="rounded-2xl px-5 py-3.5 hover:bg-gray-50"
+                >
+                  Доставка
+                </Link>
 
-                <div className="mt-6 pt-6 border-t border-gray-100">
-                  {email ? (
-                    <Button 
-                      variant="secondary" 
-                      className="w-full !rounded-[18px] h-12" 
-                      onClick={signOut} 
-                      leftIcon={<LogOut size={16} />}
-                    >
-                      Выйти
-                    </Button>
-                  ) : (
-                    <Link href="/auth" onClick={() => setMobileOpen(false)}>
-                      <Button variant="secondary" className="w-full !rounded-[18px] h-12 bg-black text-white hover:bg-gray-800">
-                        Войти
-                      </Button>
-                    </Link>
+                <Link
+                  href="/cart"
+                  onClick={() => setMobileOpen(false)}
+                  className="flex items-center justify-between rounded-2xl px-5 py-3.5 hover:bg-gray-50"
+                >
+                  Корзина
+                  {cartCount > 0 && (
+                    <span className="rounded-full bg-emerald-600 px-2.5 py-1 text-sm font-black text-white">
+                      {cartCount}
+                    </span>
                   )}
-                </div>
+                </Link>
+
+                <div className="my-5 h-px bg-gray-100" />
+
+                {email ? (
+                  <button onClick={signOut} className="rounded-2xl px-5 py-3.5 text-left text-red-500 hover:bg-red-50">
+                    Выйти
+                  </button>
+                ) : (
+                  <Link
+                    href="/auth"
+                    onClick={() => setMobileOpen(false)}
+                    className="rounded-2xl bg-emerald-600 py-3.5 text-center font-black text-white shadow-sm hover:bg-emerald-700"
+                  >
+                    Войти
+                  </Link>
+                )}
               </nav>
             </motion.div>
           </>

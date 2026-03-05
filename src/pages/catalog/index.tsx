@@ -1,45 +1,56 @@
 // src/pages/catalog/index.tsx
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import { motion, AnimatePresence } from "framer-motion";
 import { authedFetch } from "@/lib/authedFetch";
 import { formatPrice } from "@/lib/format";
 import type { CatalogVariant } from "@/lib/types";
 import {
-  ArrowRight,
   Search,
-  SlidersHorizontal,
   ShoppingBag,
-  X,
   CheckCircle2,
   AlertTriangle,
+  Sparkles,
+  Heart,
 } from "lucide-react";
+import { Header } from "@/components/layout/Header";
 
 function normalizeCatalogResponse(json: any): CatalogVariant[] {
-  // Поддерживаем:
-  // 1) массив
-  // 2) { data: массив }
-  // 3) { items: массив } (на всякий)
-  const arr = Array.isArray(json)
-    ? json
-    : Array.isArray(json?.data)
-      ? json.data
-      : Array.isArray(json?.items)
-        ? json.items
-        : [];
+  const arr = Array.isArray(json) ? json : json?.data || json?.items || [];
   return arr as CatalogVariant[];
 }
 
 type ToastKind = "success" | "error" | "info";
 
+function getCardId(v: CatalogVariant) {
+  // Страница /product/[id].tsx у тебя грузит по productId и потом фильтрует variants по product_id
+  // Поэтому лучше передавать product_id. Если его нет — fallback на variant_id
+  return (v as any).product_id ?? (v as any).variant_id ?? "";
+}
+
+function getImg(v: CatalogVariant) {
+  return (
+    (v as any).image_url ||
+    (v as any).base_image_url ||
+    "https://placehold.co/600x800?text=SmartShop"
+  );
+}
+
 export default function CatalogPage() {
   const [items, setItems] = useState<CatalogVariant[]>([]);
   const [loading, setLoading] = useState(true);
-
   const [brand, setBrand] = useState("");
   const [q, setQ] = useState("");
-  const [sort, setSort] = useState<"relevance" | "price_asc" | "price_desc">("relevance");
+  const [sort, setSort] = useState<"relevance" | "price_asc" | "price_desc">(
+    "relevance"
+  );
+  const [toast, setToast] = useState<{ kind: ToastKind; text: string } | null>(
+    null
+  );
 
-  const [toast, setToast] = useState<{ kind: ToastKind; text: string } | null>(null);
+  // favorites
+  const [favIds, setFavIds] = useState<string[]>([]);
+  const favSet = useMemo(() => new Set(favIds), [favIds]);
 
   const abortRef = useRef<AbortController | null>(null);
   const debounceRef = useRef<number | null>(null);
@@ -48,13 +59,69 @@ export default function CatalogPage() {
   const showToast = (kind: ToastKind, text: string) => {
     setToast({ kind, text });
     if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
-    toastTimerRef.current = window.setTimeout(() => setToast(null), 2800);
+    toastTimerRef.current = window.setTimeout(() => setToast(null), 3000);
   };
 
+  // ----- FAVORITES -----
+  const loadFavorites = async () => {
+    try {
+      const r = await authedFetch("/api/favorites");
+      if (!r.ok) return; // если не залогинен — просто пропускаем
+      const data = (await r.json()) as string[];
+      setFavIds(Array.isArray(data) ? data : []);
+    } catch {
+      // не критично
+    }
+  };
+
+  const toggleFavorite = async (variantId: string) => {
+    if (!variantId) return showToast("error", "Нет variant_id");
+
+    // оптимистично
+    const was = favSet.has(variantId);
+    setFavIds((prev) => (was ? prev.filter((x) => x !== variantId) : [variantId, ...prev]));
+
+    try {
+      const r = await authedFetch("/api/favorites/toggle", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ variantId }),
+      });
+
+      if (!r.ok) {
+        // откат
+        setFavIds((prev) => (was ? [variantId, ...prev] : prev.filter((x) => x !== variantId)));
+        return showToast("info", "Нужно войти в аккаунт");
+      }
+
+      const json = await r.json().catch(() => ({}));
+      const active = Boolean((json as any)?.active);
+
+      // синхронизация
+      setFavIds((prev) => {
+        const has = prev.includes(variantId);
+        if (active && !has) return [variantId, ...prev];
+        if (!active && has) return prev.filter((x) => x !== variantId);
+        return prev;
+      });
+
+      showToast("success", active ? "Добавлено в избранное" : "Убрано из избранного");
+    } catch {
+      // откат
+      setFavIds((prev) => (was ? [variantId, ...prev] : prev.filter((x) => x !== variantId)));
+      showToast("error", "Ошибка сети");
+    }
+  };
+
+  // грузим избранное при первом открытии
+  useEffect(() => {
+    loadFavorites();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ----- CATALOG -----
   const loadCatalog = async (nextBrand: string, nextQ: string) => {
     setLoading(true);
-
-    // отменяем прошлый запрос
     abortRef.current?.abort();
     const controller = new AbortController();
     abortRef.current = controller;
@@ -69,73 +136,51 @@ export default function CatalogPage() {
       });
 
       const json = await res.json().catch(() => ({}));
-      const list = normalizeCatalogResponse(json);
-
-      setItems(list);
+      setItems(normalizeCatalogResponse(json));
     } catch (e: any) {
       if (e?.name !== "AbortError") {
         setItems([]);
-        showToast("error", "Не удалось загрузить каталог. Обнови страницу.");
+        showToast("error", "Ошибка загрузки данных.");
       }
     } finally {
       setLoading(false);
     }
   };
 
-  // initial load
-  useEffect(() => {
-    loadCatalog(brand, q);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // reload with debounce on filters
   useEffect(() => {
     if (debounceRef.current) window.clearTimeout(debounceRef.current);
-
-    debounceRef.current = window.setTimeout(() => {
-      loadCatalog(brand, q);
-    }, 280);
+    debounceRef.current = window.setTimeout(() => loadCatalog(brand, q), 300);
 
     return () => {
       if (debounceRef.current) window.clearTimeout(debounceRef.current);
+      abortRef.current?.abort();
+      if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [brand, q]);
 
-  useEffect(() => {
-    return () => {
-      abortRef.current?.abort();
-      if (debounceRef.current) window.clearTimeout(debounceRef.current);
-      if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
-    };
-  }, []);
-
-  const brands = useMemo(() => {
-    return Array.from(new Set((items ?? []).map((item) => item.brand)))
-      .filter(Boolean)
-      .sort();
-  }, [items]);
+  const brands = ["Apple", "Samsung", "Xiaomi", "Google", "Nothing", "OnePlus"];
 
   const viewItems = useMemo(() => {
-    const arr = [...(items ?? [])];
+    const arr = [...items];
 
     if (sort === "price_asc") {
-      arr.sort((a, b) => (a.price_kzt ?? 0) - (b.price_kzt ?? 0));
+      arr.sort((a, b) => ((a as any).price_kzt ?? 0) - ((b as any).price_kzt ?? 0));
     } else if (sort === "price_desc") {
-      arr.sort((a, b) => (b.price_kzt ?? 0) - (a.price_kzt ?? 0));
+      arr.sort((a, b) => ((b as any).price_kzt ?? 0) - ((a as any).price_kzt ?? 0));
+    }
+
+    const qq = q.trim().toLowerCase();
+    if (qq) {
+      return arr.filter((v) =>
+        String((v as any).title ?? "")
+          .toLowerCase()
+          .includes(qq)
+      );
     }
 
     return arr;
-  }, [items, sort]);
-
-  const hasFilters = brand.trim().length > 0 || q.trim().length > 0 || sort !== "relevance";
-
-  const resetFilters = () => {
-    setBrand("");
-    setQ("");
-    setSort("relevance");
-    showToast("info", "Фильтры сброшены.");
-  };
+  }, [items, sort, q]);
 
   const addToCart = async (variantId: string) => {
     try {
@@ -144,272 +189,305 @@ export default function CatalogPage() {
         body: JSON.stringify({ variantId, quantity: 1 }),
       });
 
-      if (res.ok) {
-        showToast("success", "Добавлено в корзину ✅");
-        return;
-      }
-
-      const e = await res.json().catch(() => ({}));
-      if (res.status === 401) {
-        showToast("info", "Нужно войти в аккаунт, чтобы добавить в корзину.");
-      } else {
-        showToast("error", e?.error || "Не удалось добавить в корзину.");
-      }
+      if (res.ok) return showToast("success", "Добавлено в корзину");
+      showToast("info", "Нужно войти в аккаунт");
     } catch {
-      showToast("error", "Сеть недоступна. Попробуй ещё раз.");
+      showToast("error", "Ошибка сети");
     }
   };
 
   return (
-    <main className="container-shell py-10 md:py-14">
-      {/* Header */}
-      <div className="mb-6 flex flex-col gap-4 md:mb-8 md:flex-row md:items-end md:justify-between">
-        <div>
-          <p className="text-xs uppercase tracking-wide text-gray-400">Каталог</p>
-          <h1 className="mt-2 text-3xl font-semibold tracking-tight text-gray-900 md:text-4xl">
-            Смартфоны
-          </h1>
-          <p className="mt-2 max-w-2xl text-sm leading-relaxed text-gray-600">
-            Минималистичный каталог в стиле Apple Store: чисто, удобно, быстро.
-          </p>
-        </div>
+    <div className="min-h-screen bg-[#f4f6f7] text-slate-900">
 
-        <Link
-          href="/cart"
-          className="inline-flex items-center justify-center gap-2 rounded-xl border border-gray-200 bg-white px-4 py-2.5 text-sm font-medium text-gray-900 shadow-[0_1px_0_rgba(0,0,0,0.03)] transition hover:-translate-y-0.5 hover:bg-gray-50 hover:shadow-sm"
-        >
-          <ShoppingBag size={16} />
-          Корзина
-          <ArrowRight size={16} className="text-gray-500" />
-        </Link>
-      </div>
+      <main className="mx-auto max-w-[1680px] px-6 py-10 sm:px-8 lg:px-10">
+        {/* Toast */}
+        <AnimatePresence>
+          {toast && (
+            <motion.div
+              initial={{ opacity: 0, y: 40 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 40 }}
+              className="fixed bottom-10 left-1/2 z-50 -translate-x-1/2 flex items-center gap-3 rounded-2xl bg-gray-900 px-6 py-4 text-white shadow-2xl"
+            >
+              {toast.kind === "success" ? (
+                <CheckCircle2 className="text-emerald-400" size={20} />
+              ) : toast.kind === "error" ? (
+                <AlertTriangle className="text-rose-400" size={20} />
+              ) : (
+                <AlertTriangle className="text-sky-300" size={20} />
+              )}
+              <span className="text-sm font-bold">{toast.text}</span>
+            </motion.div>
+          )}
+        </AnimatePresence>
 
-      {/* Filters */}
-      <section className="card-surface mb-6 p-4 md:mb-8 md:p-5">
-        <div className="flex flex-col gap-3 md:flex-row md:items-center">
-          {/* Search */}
-          <div className="relative flex-1">
-            <Search size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-            <input
-              className="h-11 w-full rounded-xl border border-gray-200 bg-white pl-9 pr-10 text-sm outline-none transition focus:border-gray-300 focus:ring-2 focus:ring-gray-200"
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-              placeholder="Поиск по модели (например: iPhone, S24)"
-              aria-label="Поиск"
-            />
-            {q ? (
-              <button
-                type="button"
-                onClick={() => setQ("")}
-                className="absolute right-2 top-1/2 inline-flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-lg border border-gray-200 bg-white text-gray-600 transition hover:bg-gray-50"
-                aria-label="Очистить поиск"
-              >
-                <X size={14} />
+        <div className="grid gap-10 lg:grid-cols-[360px_1fr]">
+          {/* SIDEBAR */}
+          <aside className="hidden lg:block space-y-10">
+            <div className="rounded-[36px] border border-emerald-100 bg-emerald-50 p-7">
+              <div className="mb-3 flex items-center gap-2 text-emerald-700">
+                <Sparkles size={20} />
+                <span className="text-[11px] font-black uppercase tracking-wider">
+                  Smart-подбор
+                </span>
+              </div>
+              <p className="mb-5 text-[15px] font-medium leading-relaxed text-emerald-900/60">
+                Поможем выбрать идеальный смартфон под ваши задачи.
+              </p>
+              <button className="w-full rounded-2xl bg-emerald-600 py-3.5 text-[15px] font-black text-white transition hover:bg-emerald-700">
+                Подобрать
               </button>
-            ) : null}
-          </div>
-
-          {/* Brand */}
-          <div className="min-w-[220px]">
-            <div className="relative">
-              <SlidersHorizontal
-                size={16}
-                className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"
-              />
-              <select
-                className="h-11 w-full appearance-none rounded-xl border border-gray-200 bg-white pl-9 pr-9 text-sm outline-none transition focus:border-gray-300 focus:ring-2 focus:ring-gray-200"
-                value={brand}
-                onChange={(e) => setBrand(e.target.value)}
-                aria-label="Бренд"
-              >
-                <option value="">Все бренды</option>
-                {brands.map((b) => (
-                  <option key={b} value={b}>
-                    {b}
-                  </option>
-                ))}
-              </select>
-              <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs text-gray-400">
-                ▾
-              </span>
             </div>
-          </div>
 
-          {/* Sort */}
-          <div className="min-w-[220px]">
-            <div className="relative">
-              <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">
-                ₸
-              </span>
+            <div>
+              <h3 className="mb-4 pl-4 text-[11px] font-black uppercase tracking-[0.22em] text-gray-400">
+                Бренды
+              </h3>
+              <div className="flex flex-col gap-1.5">
+                <button
+                  onClick={() => setBrand("")}
+                  className={[
+                    "flex items-center rounded-2xl px-5 py-3.5 text-[15px] font-black transition-all",
+                    !brand
+                      ? "bg-emerald-600 text-white shadow-lg shadow-emerald-100"
+                      : "text-gray-600 hover:bg-gray-50",
+                  ].join(" ")}
+                >
+                  Все устройства
+                </button>
+
+                {brands.map((b) => (
+                  <button
+                    key={b}
+                    onClick={() => setBrand(b)}
+                    className={[
+                      "flex items-center rounded-2xl px-5 py-3.5 text-[15px] font-black transition-all",
+                      brand === b
+                        ? "bg-emerald-600 text-white shadow-lg shadow-emerald-100"
+                        : "text-gray-600 hover:bg-gray-50",
+                    ].join(" ")}
+                  >
+                    {b}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <h3 className="mb-4 pl-4 text-[11px] font-black uppercase tracking-[0.22em] text-gray-400">
+                Сортировка
+              </h3>
               <select
-                className="h-11 w-full appearance-none rounded-xl border border-gray-200 bg-white pl-9 pr-9 text-sm outline-none transition focus:border-gray-300 focus:ring-2 focus:ring-gray-200"
                 value={sort}
                 onChange={(e) => setSort(e.target.value as any)}
-                aria-label="Сортировка"
+                className="h-12 w-full appearance-none rounded-2xl border border-gray-100 bg-white px-5 text-[15px] font-black shadow-sm outline-none transition-all focus:border-emerald-500"
               >
-                <option value="relevance">По умолчанию</option>
-                <option value="price_asc">Цена: по возрастанию</option>
-                <option value="price_desc">Цена: по убыванию</option>
+                <option value="relevance">По популярности</option>
+                <option value="price_asc">Сначала дешевле</option>
+                <option value="price_desc">Сначала дороже</option>
               </select>
-              <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs text-gray-400">
-                ▾
-              </span>
             </div>
-          </div>
+          </aside>
 
-          {/* Reset */}
-          <div className="md:ml-auto">
-            <button
-              type="button"
-              onClick={resetFilters}
-              disabled={!hasFilters}
-              className="h-11 w-full rounded-xl border border-gray-200 bg-white px-4 text-sm font-medium text-gray-900 shadow-[0_1px_0_rgba(0,0,0,0.03)] transition hover:-translate-y-0.5 hover:bg-gray-50 hover:shadow-sm disabled:cursor-not-allowed disabled:opacity-50 md:w-auto"
-            >
-              Сбросить
-            </button>
-          </div>
-        </div>
-
-        <div className="mt-3 flex flex-col gap-2 text-xs text-gray-500 md:flex-row md:items-center md:justify-between">
-          <p>
-            {loading ? "Загрузка..." : `Найдено: ${viewItems.length}`}
-            {brand ? <span className="ml-1">· Бренд: {brand}</span> : null}
-            {q ? <span className="ml-1">· Поиск: “{q}”</span> : null}
-          </p>
-
-          <p className="hidden md:block">Совет: открой карточку — там будут варианты памяти/цвета.</p>
-        </div>
-      </section>
-
-      {/* Toast */}
-      {toast ? (
-        <div
-          className={[
-            "mb-6 flex items-start gap-3 rounded-2xl border bg-white px-4 py-3 text-sm shadow-[0_1px_0_rgba(0,0,0,0.03)]",
-            toast.kind === "success" ? "border-emerald-200" : "",
-            toast.kind === "error" ? "border-rose-200" : "",
-            toast.kind === "info" ? "border-gray-200" : "",
-          ].join(" ")}
-          role="status"
-        >
-          <span className="mt-0.5">
-            {toast.kind === "success" ? (
-              <CheckCircle2 size={18} className="text-emerald-600" />
-            ) : toast.kind === "error" ? (
-              <AlertTriangle size={18} className="text-rose-600" />
-            ) : (
-              <SlidersHorizontal size={18} className="text-gray-600" />
-            )}
-          </span>
-          <div className="flex-1 text-gray-800">{toast.text}</div>
-          <button
-            type="button"
-            onClick={() => setToast(null)}
-            className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-gray-200 bg-white text-gray-600 transition hover:bg-gray-50"
-            aria-label="Закрыть"
-          >
-            <X size={14} />
-          </button>
-        </div>
-      ) : null}
-
-      {/* Content */}
-      {loading ? (
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          {Array.from({ length: 8 }).map((_, idx) => (
-            <div key={idx} className="card-surface p-4">
-              <div className="mb-3 h-44 w-full animate-pulse rounded-2xl bg-gray-100" />
-              <div className="h-3 w-20 animate-pulse rounded bg-gray-100" />
-              <div className="mt-2 h-4 w-48 animate-pulse rounded bg-gray-100" />
-              <div className="mt-2 h-3 w-32 animate-pulse rounded bg-gray-100" />
-              <div className="mt-4 h-10 w-full animate-pulse rounded-xl bg-gray-100" />
-            </div>
-          ))}
-        </div>
-      ) : viewItems.length === 0 ? (
-        <div className="card-surface p-8 md:p-10">
-          <p className="text-lg font-medium text-gray-900">Ничего не найдено</p>
-          <p className="mt-1 text-sm text-gray-600">
-            Попробуй изменить поиск или выбрать другой бренд.
-          </p>
-
-          <div className="mt-6 flex flex-col gap-3 sm:flex-row">
-            <button
-              type="button"
-              onClick={resetFilters}
-              className="inline-flex items-center justify-center rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-slate-800"
-            >
-              Сбросить фильтры
-            </button>
-
-            <Link
-              href="/catalog"
-              className="inline-flex items-center justify-center rounded-xl border border-gray-200 bg-white px-4 py-2.5 text-sm font-medium text-gray-900 transition hover:bg-gray-50"
-            >
-              Обновить
-            </Link>
-          </div>
-        </div>
-      ) : (
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          {viewItems.map((item) => (
-            <article
-              key={item.variant_id}
-              className="group card-surface overflow-hidden p-4 transition-transform duration-200 hover:-translate-y-0.5 hover:shadow-md"
-            >
-              <div className="relative overflow-hidden rounded-2xl border border-gray-200/70 bg-gray-50">
-                <img
-                  src={item.image_url || "https://placehold.co/800x560?text=Smartphone"}
-                  alt={item.title}
-                  className="h-44 w-full object-cover transition-transform duration-300 group-hover:scale-[1.03]"
-                  loading="lazy"
-                />
-                <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/10 via-transparent to-transparent opacity-0 transition-opacity duration-300 group-hover:opacity-100" />
-              </div>
-
-              <div className="mt-3">
-                <p className="text-xs text-gray-500">{item.brand}</p>
-                <h3 className="mt-0.5 line-clamp-2 text-base font-medium tracking-tight text-gray-900">
-                  {item.title}
-                </h3>
-                <p className="mt-1 text-sm text-gray-600">
-                  {item.memory_gb} ГБ · {item.color}
+          {/* MAIN */}
+          <section>
+            <header className="mb-10 flex flex-col gap-7 md:flex-row md:items-end md:justify-between">
+              <div>
+                <h1 className="text-5xl font-black tracking-tight text-gray-900">
+                  Все смартфоны
+                </h1>
+                <p className="mt-3 flex items-center gap-2 text-[15px] font-semibold text-gray-500">
+                  Доступно в Астане сегодня{" "}
+                  <span className="h-1.5 w-1.5 rounded-full bg-gray-300" />{" "}
+                  <span className="font-black text-emerald-600">
+                    {viewItems.length} моделей
+                  </span>
                 </p>
-
-                <div className="mt-3 flex items-baseline justify-between gap-3">
-                  <p className="text-lg font-semibold tracking-tight text-gray-900">
-                    {formatPrice(item.price_kzt)}
-                  </p>
-                  <Link
-                    href={`/product/${item.product_id}`}
-                    className="inline-flex items-center gap-1 rounded-lg border border-gray-200 bg-white px-2.5 py-1.5 text-xs font-medium text-gray-900 transition hover:bg-gray-50"
-                  >
-                    Открыть <ArrowRight size={14} className="text-gray-500" />
-                  </Link>
-                </div>
-
-                <div className="mt-3 flex gap-2">
-                  <button
-                    type="button"
-                    onClick={() => addToCart(item.variant_id)}
-                    className="flex-1 rounded-xl bg-slate-900 py-2.5 text-sm font-medium text-white transition hover:bg-slate-800"
-                  >
-                    В корзину
-                  </button>
-
-                  <Link
-                    href={`/product/${item.product_id}`}
-                    className="inline-flex items-center justify-center rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm font-medium text-gray-900 transition hover:bg-gray-50"
-                    aria-label={`Открыть ${item.title}`}
-                  >
-                    <ArrowRight size={16} className="text-gray-600" />
-                  </Link>
-                </div>
               </div>
-            </article>
-          ))}
+
+              <div className="flex w-full flex-col gap-3 md:w-[520px] md:flex-row md:items-center md:justify-end">
+                {/* Search */}
+                <div className="relative w-full md:w-[420px]">
+                  <Search
+                    className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400"
+                    size={20}
+                  />
+                  <input
+                    type="text"
+                    value={q}
+                    onChange={(e) => setQ(e.target.value)}
+                    placeholder="Поиск по названию..."
+                    className="h-12 w-full rounded-2xl border border-gray-100 bg-white pl-12 pr-4 text-[15px] font-semibold shadow-sm outline-none transition-all focus:border-emerald-500"
+                  />
+                </div>
+
+                {/* Favorites link */}
+                <Link
+                  href="/favorites"
+                  className="inline-flex items-center justify-center gap-2 rounded-2xl border border-gray-100 bg-white px-4 py-3 text-[14px] font-black text-gray-700 shadow-sm transition hover:border-emerald-200 hover:shadow-md"
+                >
+                  <Heart size={18} className="text-rose-500" />
+                  Избранное
+                  {favIds.length > 0 && (
+                    <span className="ml-1 rounded-full bg-rose-50 px-2 py-0.5 text-[12px] font-black text-rose-600">
+                      {favIds.length}
+                    </span>
+                  )}
+                </Link>
+              </div>
+            </header>
+
+            {loading ? (
+              <div className="grid grid-cols-1 gap-7 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-5">
+                {Array.from({ length: 10 }).map((_, i) => (
+                  <div
+                    key={i}
+                    className="h-[520px] animate-pulse rounded-[36px] bg-gray-100"
+                  />
+                ))}
+              </div>
+            ) : viewItems.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-24 text-center">
+                <div className="mb-5 rounded-full bg-gray-50 p-7 text-gray-300">
+                  <Search size={56} />
+                </div>
+                <h3 className="text-2xl font-black text-gray-900">
+                  Ничего не нашли
+                </h3>
+                <p className="mt-2 text-[15px] font-medium text-gray-500">
+                  Попробуйте изменить фильтры или текст поиска
+                </p>
+                <button
+                  onClick={() => {
+                    setBrand("");
+                    setQ("");
+                  }}
+                  className="mt-7 rounded-2xl bg-gray-900 px-7 py-3.5 text-[15px] font-black text-white transition hover:bg-gray-800"
+                >
+                  Сбросить всё
+                </button>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 gap-7 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-5">
+                {viewItems.map((item) => {
+                  const cardId = getCardId(item);
+                  const variantId = String((item as any).variant_id ?? "");
+                  const price = Number((item as any).price_kzt ?? 0);
+                  const isFav = favSet.has(variantId);
+
+                  return (
+                    <motion.div
+                      layout
+                      key={variantId || cardId}
+                      className="group"
+                    >
+                      {/* Вся карточка кликабельна */}
+                      <Link
+                        href={cardId ? `/product/${encodeURIComponent(cardId)}` : "#"}
+                        className="flex h-full flex-col rounded-[36px] border border-transparent bg-white p-6 transition-all hover:border-emerald-100 hover:shadow-2xl hover:shadow-emerald-100/40"
+                      >
+                        {/* Image + like */}
+                        <div className="relative mb-7 flex aspect-[4/5] items-center justify-center overflow-hidden rounded-3xl bg-[#F9F9F9]">
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={getImg(item)}
+                            alt={String((item as any).title ?? "Товар")}
+                            className="h-[84%] w-auto object-contain transition-transform duration-500 group-hover:scale-110"
+                            loading="lazy"
+                          />
+
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              toggleFavorite(variantId);
+                            }}
+                            className={[
+                              "absolute right-4 top-4 flex h-11 w-11 items-center justify-center rounded-full shadow-sm transition-all",
+                              isFav
+                                ? "bg-rose-50 text-rose-600"
+                                : "bg-white text-gray-300 hover:text-rose-500",
+                            ].join(" ")}
+                            aria-label={isFav ? "Убрать из избранного" : "В избранное"}
+                          >
+                            <Heart
+                              size={22}
+                              className={[
+                                "transition",
+                                isFav
+                                  ? "fill-current opacity-100"
+                                  : "fill-current opacity-20 group-hover:opacity-100",
+                              ].join(" ")}
+                            />
+                          </button>
+                        </div>
+
+                        {/* Content */}
+                        <div className="flex-1 space-y-3">
+                          <div className="flex items-center justify-between">
+                            <span className="text-[11px] font-black uppercase tracking-widest text-emerald-600">
+                              {String((item as any).brand ?? "")}
+                            </span>
+                            <span className="rounded-full bg-amber-100 px-2.5 py-1 text-[10px] font-black text-amber-600">
+                              0-0-24
+                            </span>
+                          </div>
+
+                          <h3 className="min-h-[3.2rem] line-clamp-2 text-[17px] font-black leading-snug text-gray-900">
+                            {String((item as any).title ?? "Товар")}
+                          </h3>
+
+                          <div className="pt-1">
+                            <p className="text-3xl font-black text-gray-900">
+                              {formatPrice(price)}
+                            </p>
+
+                            <div className="mt-4 space-y-2">
+                              <div className="flex items-center gap-2 text-[12px] font-bold text-gray-600">
+                                <span className="flex h-5 w-5 items-center justify-center rounded-full bg-emerald-50 text-[11px] text-emerald-600">
+                                  ₸
+                                </span>
+                                <span>
+                                  {formatPrice(Math.round(price * 0.05))} с учетом
+                                  кешбэка
+                                </span>
+                              </div>
+                              <div className="flex items-center gap-2 text-[12px] font-bold text-gray-600">
+                                <span className="flex h-5 w-5 items-center justify-center rounded-full bg-gray-100 text-[11px] text-gray-400">
+                                  ●
+                                </span>
+                                <span>
+                                  от {formatPrice(Math.round(price / 24))} /мес × 24
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Buy button */}
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            if (!variantId) return showToast("error", "Нет variant_id");
+                            addToCart(variantId);
+                          }}
+                          className="mt-7 flex w-full items-center justify-center gap-2 rounded-3xl bg-[#00C853] py-4 text-[15px] font-black text-white transition-all hover:bg-[#00B44A] active:scale-[0.98]"
+                        >
+                          <ShoppingBag size={20} />
+                          Купить
+                        </button>
+                      </Link>
+                    </motion.div>
+                  );
+                })}
+              </div>
+            )}
+          </section>
         </div>
-      )}
-    </main>
+      </main>
+    </div>
   );
 }

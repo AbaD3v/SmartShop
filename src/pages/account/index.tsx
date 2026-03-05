@@ -1,249 +1,253 @@
-// src/pages/account/index.tsx
-import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
-import { formatPrice } from "@/lib/format";
+// src/pages/account/orders/index.tsx
+import { useRouter } from "next/router";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { motion, AnimatePresence } from "framer-motion";
 import { authedFetch } from "@/lib/authedFetch";
+import { formatPrice } from "@/lib/format";
 import {
-  ArrowRight,
-  Package,
-  Receipt,
-  ShieldCheck,
+  Search,
+  ShoppingBag,
   AlertTriangle,
-  Info,
-  X,
+  CheckCircle2,
+  Clock,
+  MapPin,
+  Receipt,
+  Loader2,
+  Image as ImageIcon,
 } from "lucide-react";
+
+type ToastKind = "success" | "error" | "info";
 
 type OrderRow = {
   id: string;
   created_at: string;
   status: string | null;
-  total_amount_kzt: number | null; // ✅
+  total_amount_kzt: number | null;
   branch_id: string | null;
-  branches?: { name?: string; address?: string } | null;
+  branches?: { name?: string | null; address?: string | null } | null;
 };
 
-type ToastKind = "info" | "error";
+type OrderPreviewMap = Record<string, string | null>;
 
-export default function AccountPage() {
-  const [orders, setOrders] = useState<OrderRow[]>([]);
+const SectionShell = ({
+  children,
+  className = "",
+}: {
+  children: React.ReactNode;
+  className?: string;
+}) => (
+  <div
+    className={[
+      "rounded-[32px] bg-white shadow-[0_1px_3px_rgba(0,0,0,0.06)] ring-1 ring-black/5",
+      className,
+    ].join(" ")}
+  >
+    {children}
+  </div>
+);
+
+function fmtDate(iso: string) {
+  try {
+    const d = new Date(iso);
+    return d.toLocaleDateString("ru-RU", { day: "2-digit", month: "short", year: "numeric" });
+  } catch {
+    return iso;
+  }
+}
+
+function statusBadge(statusRaw: string | null | undefined) {
+  const s = String(statusRaw ?? "pending").toLowerCase();
+  if (["paid", "completed", "done", "success"].includes(s)) {
+    return { label: "Готов", cls: "bg-emerald-50 text-emerald-700 ring-emerald-200/50", icon: CheckCircle2 };
+  }
+  if (["cancelled", "canceled", "failed", "rejected"].includes(s)) {
+    return { label: "Отменён", cls: "bg-rose-50 text-rose-700 ring-rose-200/50", icon: AlertTriangle };
+  }
+  return { label: "В работе", cls: "bg-sky-50 text-sky-700 ring-sky-200/50", icon: Clock };
+}
+
+export default function OrdersPage() {
+  const router = useRouter();
+  const [items, setItems] = useState<OrderRow[]>([]);
   const [loading, setLoading] = useState(true);
+  const [q, setQ] = useState("");
+  const [status, setStatus] = useState<"all" | "pending" | "processing" | "done" | "cancelled">("all");
   const [toast, setToast] = useState<{ kind: ToastKind; text: string } | null>(null);
+  const toastTimerRef = useRef<number | null>(null);
+  const [previews, setPreviews] = useState<OrderPreviewMap>({});
+
+  const showToast = (kind: ToastKind, text: string) => {
+    setToast({ kind, text });
+    if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = window.setTimeout(() => setToast(null), 2600);
+  };
 
   const load = async () => {
     setLoading(true);
-    setToast(null);
-
-    const res = await authedFetch("/api/orders"); // ✅ ВАЖНО: именно /api/orders
-
-    if (res.status === 401) {
-      setOrders([]);
-      setToast({ kind: "info", text: "Войди в аккаунт, чтобы увидеть заказы." });
+    try {
+      const r = await authedFetch("/api/orders");
+      const json = await r.json().catch(() => []);
+      setItems(Array.isArray(json) ? (json as OrderRow[]) : []);
+    } catch {
+      showToast("error", "Ошибка загрузки");
+    } finally {
       setLoading(false);
-      return;
     }
-
-    const json = await res.json().catch(() => ({}));
-
-    if (!res.ok) {
-      setOrders([]);
-      setToast({ kind: "error", text: json?.error || "Не удалось загрузить заказы." });
-      setLoading(false);
-      return;
-    }
-
-    // ✅ гарантируем массив
-    setOrders(Array.isArray(json) ? (json as OrderRow[]) : []);
-    setLoading(false);
   };
 
   useEffect(() => {
     load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    return () => { if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current); };
   }, []);
 
-  const totalSpent = useMemo(() => {
-    return (orders ?? []).reduce((sum, o) => sum + (o.total_amount_kzt ?? 0), 0);
-  }, [orders]);
+  useEffect(() => {
+    const need = items.slice(0, 10).filter(o => previews[o.id] === undefined);
+    if (!need.length) return;
+    need.forEach(async (o) => {
+      try {
+        const r = await authedFetch(`/api/orders/${encodeURIComponent(o.id)}`);
+        const data = await r.json();
+        setPreviews(p => ({ ...p, [o.id]: data?.items?.[0]?.image_url ?? null }));
+      } catch {
+        setPreviews(p => ({ ...p, [o.id]: null }));
+      }
+    });
+  }, [items, previews]);
 
-  const count = orders.length;
-
-  const statusLabel = (s: string | null) => {
-    if (!s) return "—";
-    const v = s.toLowerCase();
-    if (v === "pending") return "В обработке";
-    if (v === "paid") return "Оплачен";
-    if (v === "ready") return "Готов к выдаче";
-    if (v === "completed") return "Выдан";
-    if (v === "canceled" || v === "cancelled") return "Отменён";
-    return s;
-  };
+  const view = useMemo(() => {
+    let arr = [...items];
+    if (status !== "all") {
+      arr = arr.filter(o => String(o.status).toLowerCase().includes(status));
+    }
+    const qq = q.trim().toLowerCase();
+    if (qq) {
+      arr = arr.filter(o => String(o.id).toLowerCase().includes(qq) || String(o.branches?.name).toLowerCase().includes(qq));
+    }
+    return arr;
+  }, [items, q, status]);
 
   return (
-    <main className="container-shell py-10 md:py-14">
-      {/* Header */}
-      <div className="mb-6 flex flex-col gap-4 md:mb-8 md:flex-row md:items-end md:justify-between">
-        <div>
-          <p className="text-xs uppercase tracking-wide text-gray-400">Аккаунт</p>
-          <h1 className="mt-2 text-3xl font-semibold tracking-tight text-gray-900 md:text-4xl">
-            Мои заказы
-          </h1>
-          <p className="mt-2 text-sm leading-relaxed text-gray-600">
-            История покупок, суммы и статусы — всё в одном месте.
-          </p>
-        </div>
-
-        <Link
-          href="/catalog"
-          className="inline-flex items-center justify-center gap-2 rounded-xl border border-gray-200 bg-white px-4 py-2.5 text-sm font-medium text-gray-900 shadow-[0_1px_0_rgba(0,0,0,0.03)] transition hover:-translate-y-0.5 hover:bg-gray-50 hover:shadow-sm"
-        >
-          <Package size={16} className="text-gray-700" />
-          Перейти в каталог
-          <ArrowRight size={16} className="text-gray-500" />
-        </Link>
-      </div>
-
-      {/* Summary cards */}
-      <div className="mb-6 grid gap-3 md:mb-8 md:grid-cols-3">
-        <div className="card-surface p-5">
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <p className="text-xs text-gray-500">Заказов</p>
-              <p className="mt-1 text-2xl font-semibold tracking-tight text-gray-900">{count}</p>
-            </div>
-            <div className="flex h-9 w-9 items-center justify-center rounded-xl border border-gray-200 bg-white shadow-[0_1px_0_rgba(0,0,0,0.03)]">
-              <Receipt size={18} className="text-gray-800" />
-            </div>
-          </div>
-        </div>
-
-        <div className="card-surface p-5">
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <p className="text-xs text-gray-500">Сумма покупок</p>
-              <p className="mt-1 text-2xl font-semibold tracking-tight text-gray-900">
-                {formatPrice(totalSpent)}
-              </p>
-            </div>
-            <div className="flex h-9 w-9 items-center justify-center rounded-xl border border-gray-200 bg-white shadow-[0_1px_0_rgba(0,0,0,0.03)]">
-              <ShieldCheck size={18} className="text-gray-800" />
-            </div>
-          </div>
-        </div>
-
-        <div className="card-surface p-5">
-          <p className="text-xs text-gray-500">Подсказка</p>
-          <p className="mt-1 text-sm leading-relaxed text-gray-700">
-            Нажми на заказ, чтобы открыть детали и состав.
-          </p>
-        </div>
-      </div>
-
-      {/* Toast */}
-      {toast ? (
-        <div
-          className={[
-            "mb-6 flex items-start gap-3 rounded-2xl border bg-white px-4 py-3 text-sm shadow-[0_1px_0_rgba(0,0,0,0.03)]",
-            toast.kind === "error" ? "border-rose-200" : "border-gray-200",
-          ].join(" ")}
-          role="status"
-        >
-          <span className="mt-0.5">
-            {toast.kind === "error" ? (
-              <AlertTriangle size={18} className="text-rose-600" />
-            ) : (
-              <Info size={18} className="text-gray-700" />
-            )}
-          </span>
-          <div className="flex-1 text-gray-800">{toast.text}</div>
-          <button
-            type="button"
-            onClick={() => setToast(null)}
-            className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-gray-200 bg-white text-gray-600 transition hover:bg-gray-50"
-            aria-label="Закрыть"
+    <div className="min-h-screen bg-[#f4f6f7] pb-20 text-slate-900">
+      <AnimatePresence>
+        {toast && (
+          <motion.div
+            initial={{ opacity: 0, y: 50, x: "-50%" }}
+            animate={{ opacity: 1, y: 0, x: "-50%" }}
+            exit={{ opacity: 0, y: 50, x: "-50%" }}
+            className="fixed bottom-10 left-1/2 z-50 flex items-center gap-3 rounded-2xl bg-slate-900 px-6 py-4 text-white shadow-2xl"
           >
-            <X size={14} />
-          </button>
-        </div>
-      ) : null}
+            <span className="text-sm font-black">{toast.text}</span>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
-      {/* Content */}
-      {loading ? (
-        <div className="grid gap-3">
-          {Array.from({ length: 5 }).map((_, i) => (
-            <div key={i} className="card-surface p-5">
-              <div className="h-3 w-40 animate-pulse rounded bg-gray-100" />
-              <div className="mt-3 h-6 w-44 animate-pulse rounded bg-gray-100" />
-              <div className="mt-3 flex gap-2">
-                <div className="h-7 w-28 animate-pulse rounded-full bg-gray-100" />
-                <div className="h-7 w-24 animate-pulse rounded-full bg-gray-100" />
-              </div>
+      <main className="mx-auto max-w-[1400px] px-6 pt-10">
+        <header className="mb-10 flex flex-col gap-6 md:flex-row md:items-end md:justify-between">
+          <div>
+            <h1 className="text-5xl font-black tracking-tight text-gray-900">Мои заказы</h1>
+            <p className="mt-2 font-bold text-gray-400">{view.length} заказов в истории</p>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="relative group flex-1 md:flex-none">
+              <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
+              <input
+                value={q}
+                onChange={(e) => setQ(e.target.value)}
+                placeholder="Поиск..."
+                className="h-12 w-full md:w-[300px] rounded-2xl border-none bg-white pl-11 pr-4 text-[14px] font-semibold shadow-sm ring-1 ring-black/5 outline-none focus:ring-2 focus:ring-emerald-500/20"
+              />
             </div>
-          ))}
-        </div>
-      ) : orders.length === 0 ? (
-        <div className="card-surface p-8 md:p-10">
-          <p className="text-gray-900">Пока нет заказов.</p>
-          <p className="mt-1 text-sm text-gray-600">
-            Начни с каталога — добавь смартфон в корзину и оформи самовывоз.
-          </p>
+            <button
+              onClick={() => router.push("/catalog")}
+              className="inline-flex h-12 items-center justify-center gap-2 rounded-2xl bg-emerald-600 px-6 text-[14px] font-black text-white shadow-lg shadow-emerald-100 transition hover:bg-emerald-700"
+            >
+              <ShoppingBag size={18} />
+              В каталог
+            </button>
+          </div>
+        </header>
 
-          <Link
-            href="/catalog"
-            className="mt-6 inline-flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-4 py-2.5 text-sm font-medium text-gray-900 transition hover:-translate-y-0.5 hover:bg-gray-50 hover:shadow-sm"
-          >
-            Выбрать смартфон
-            <ArrowRight size={16} className="text-gray-500" />
-          </Link>
-        </div>
-      ) : (
-        <div className="space-y-3">
-          {orders.map((order) => {
-            const created = new Date(order.created_at);
-            const branchName = order.branches?.name ?? null;
+        {loading ? (
+          <div className="flex h-64 flex-col items-center justify-center gap-4 font-bold text-gray-400">
+            <Loader2 className="animate-spin text-emerald-500" size={32} />
+            Загрузка...
+          </div>
+        ) : (
+          <div className="grid gap-6 md:grid-cols-2">
+            {view.map((o) => {
+              const b = statusBadge(o.status);
+              const StatusIcon = b.icon;
+              const img = previews[o.id];
 
-            return (
-              <Link
-                href={`/account/${order.id}`}
-                key={order.id}
-                className="group card-surface block p-5 transition-transform duration-200 hover:-translate-y-0.5 hover:shadow-md"
-              >
-                <div className="flex items-start justify-between gap-4">
-                  <div className="min-w-0">
-                    <p className="text-sm text-gray-500">
-                      <span className="font-medium text-gray-700">#{order.id.slice(0, 8)}</span>{" "}
-                      <span className="mx-1">·</span>
-                      {created.toLocaleString("ru-RU")}
-                    </p>
+              return (
+                <motion.div key={o.id} layout initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+                  <SectionShell className="p-6 transition-all border border-transparent hover:border-emerald-100">
+                    <div className="flex items-start justify-between gap-4">
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className={`inline-flex items-center gap-2 rounded-full px-3 py-1 text-[11px] font-black ring-1 ${b.cls}`}>
+                            <StatusIcon size={14} />
+                            {b.label}
+                          </span>
+                          <span className="text-[12px] font-black text-gray-400">
+                            #{String(o.id).slice(0, 8).toUpperCase()}
+                          </span>
+                        </div>
+                        <div className="mt-4 flex items-start gap-2 text-[14px] font-black text-gray-900">
+                          <MapPin size={18} className="text-emerald-600 shrink-0" />
+                          <div className="truncate">{o.branches?.name ?? "Филиал не указан"}</div>
+                        </div>
+                      </div>
+                      <div className="text-right shrink-0">
+                        <div className="text-[24px] font-black text-gray-900">
+                          {formatPrice(Number(o.total_amount_kzt))}
+                        </div>
+                        <div className="text-[12px] font-bold text-gray-400">{fmtDate(o.created_at)}</div>
+                      </div>
+                    </div>
 
-                    <p className="mt-2 text-2xl font-semibold tracking-tight text-gray-900">
-                      {formatPrice(order.total_amount_kzt || 0)}
-                    </p>
-                  </div>
+                    <div className="mt-6 flex flex-col sm:flex-row sm:items-center gap-5">
+                      <div className="relative h-24 w-24 shrink-0 overflow-hidden rounded-[20px] bg-gray-50 ring-1 ring-black/5">
+                        {img === undefined ? (
+                          <div className="flex h-full w-full animate-pulse items-center justify-center bg-gray-100">
+                            <Loader2 size={16} className="animate-spin text-gray-300" />
+                          </div>
+                        ) : img ? (
+                          <img src={img} alt="" className="h-full w-full object-cover" />
+                        ) : (
+                          <div className="flex h-full w-full items-center justify-center text-gray-200">
+                            <ImageIcon size={28} />
+                          </div>
+                        )}
+                      </div>
 
-                  <div className="hidden shrink-0 items-center gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-900 transition group-hover:bg-gray-50 md:inline-flex">
-                    Детали
-                    <ArrowRight size={16} className="text-gray-500" />
-                  </div>
-                </div>
+                      <div className="flex flex-wrap items-center gap-3">
+                        <button
+                          type="button"
+                          onClick={() => router.push(`/account/orders/${o.id}`)}
+                          className="inline-flex h-[48px] items-center justify-center rounded-[16px] bg-[#0B1220] px-8 text-[14px] font-black text-white transition hover:bg-[#111827] active:scale-95 shadow-sm"
+                        >
+                          Детали заказа
+                        </button>
 
-                <div className="mt-3 flex flex-wrap gap-2 text-xs text-gray-700">
-                  {branchName ? (
-                    <span className="rounded-full border border-gray-200 bg-white px-2.5 py-1">
-                      {branchName}
-                    </span>
-                  ) : null}
-
-                  {order.status ? (
-                    <span className="rounded-full border border-gray-200 bg-white px-2.5 py-1">
-                      {statusLabel(order.status)}
-                    </span>
-                  ) : null}
-                </div>
-              </Link>
-            );
-          })}
-        </div>
-      )}
-    </main>
+                        <button
+                          type="button"
+                          onClick={() => showToast("info", "Квитанция формируется...")}
+                          className="inline-flex h-[48px] items-center justify-center gap-2 rounded-[16px] bg-white px-6 text-[14px] font-black text-slate-700 ring-1 ring-black/5 transition hover:bg-slate-50 active:scale-95 shadow-sm"
+                        >
+                          Квитанция
+                          <Receipt size={18} className="text-emerald-500" />
+                        </button>
+                      </div>
+                    </div>
+                  </SectionShell>
+                </motion.div>
+              );
+            })}
+          </div>
+        )}
+      </main>
+    </div>
   );
 }

@@ -1,16 +1,16 @@
+// src/pages/cart.tsx
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useCallback } from "react";
 import { formatPrice } from "@/lib/format";
 import type { CartResponse, CartItem } from "@/lib/types";
 import { authedFetch } from "@/lib/authedFetch";
 import { motion, AnimatePresence, Variants } from "framer-motion";
 import { 
   Trash2, Plus, Minus, ShoppingBag, ArrowRight, 
-  Loader2, AlertCircle, Sparkles 
+  Loader2, AlertCircle, Sparkles, Check
 } from "lucide-react";
 import { Button } from "@/components/ui/Button";
-
-// Локальный интерфейс для продукта, чтобы избежать ошибок импорта
+import { RecommendedProducts } from "@/components/RecommendedProducts";
 interface Product {
   id: string;
   title: string;
@@ -21,13 +21,13 @@ interface Product {
 
 const containerVariants: Variants = {
   hidden: { opacity: 0 },
-  show: { opacity: 1, transition: { staggerChildren: 0.05 } }
+  show: { opacity: 1, transition: { staggerChildren: 0.08 } }
 };
 
 const itemVariants: Variants = {
-  hidden: { opacity: 0, y: 10 },
-  show: { opacity: 1, y: 0, transition: { duration: 0.4, ease: [0.16, 1, 0.3, 1] } },
-  exit: { opacity: 0, scale: 0.95, transition: { duration: 0.2 } }
+  hidden: { opacity: 0, y: 15 },
+  show: { opacity: 1, y: 0, transition: { duration: 0.5, ease: [0.19, 1, 0.22, 1] } },
+  exit: { opacity: 0, scale: 0.96, transition: { duration: 0.2 } }
 };
 
 export default function CartPage() {
@@ -36,9 +36,9 @@ export default function CartPage() {
   const [msg, setMsg] = useState<string | null>(null);
   const [loadingId, setLoadingId] = useState<string | null>(null);
   const [isRecLoading, setIsRecLoading] = useState(true);
+  const [addedId, setAddedId] = useState<string | null>(null); // Для анимации успеха
 
-  // Загрузка корзины
-  const loadCart = async () => {
+  const loadCart = useCallback(async () => {
     try {
       const res = await authedFetch("/api/cart");
       if (res.status === 401) {
@@ -46,36 +46,23 @@ export default function CartPage() {
         setMsg("Войдите в аккаунт, чтобы пользоваться корзиной.");
         return;
       }
-
-      const contentType = res.headers.get("content-type");
-      if (!res.ok || !contentType?.includes("application/json")) {
-        throw new Error("Invalid response from cart API");
-      }
-
+      if (!res.ok) throw new Error("API Error");
       const json = await res.json();
-      setCart(json.cart ? json.cart : json);
+      setCart(json.cart || json);
     } catch (e) {
       setMsg("Не удалось загрузить корзину.");
       setCart({ cartId: "", items: [] });
     }
-  };
+  }, []);
 
-  // Загрузка реальных товаров для рекомендаций
   const loadRecommendations = async () => {
     try {
       const res = await fetch("/api/products?limit=8");
-      const contentType = res.headers.get("content-type");
-      
-      if (!res.ok || !contentType?.includes("application/json")) {
-        console.warn("Recommendations API returned non-JSON response");
-        return;
-      }
-
+      if (!res.ok) return;
       const data = await res.json();
-      const prods = Array.isArray(data) ? data : data.products || [];
-      setRecommended(prods);
+      setRecommended(Array.isArray(data) ? data : data.products || []);
     } catch (e) {
-      console.error("Failed to load recommendations:", e);
+      console.error("Recs load failed", e);
     } finally {
       setIsRecLoading(false);
     }
@@ -84,18 +71,15 @@ export default function CartPage() {
   useEffect(() => {
     loadCart();
     loadRecommendations();
-  }, []);
+  }, [loadCart]);
 
-  // Фильтруем рекомендации: убираем то, что уже в корзине (по названию или ID)
   const filteredRecs = useMemo(() => {
-    if (!cart?.items) return recommended;
-    const cartIds = new Set(cart.items.map(item => item.variant_id));
-    // Дополнительно фильтруем по заголовкам, чтобы не предлагать тот же iPhone другого цвета
-    const cartTitles = new Set(cart.items.map(item => item.title.split(' ')[0])); 
-    
-    return recommended.filter(p => 
-      !cartIds.has(p.id) && !cartTitles.has(p.title.split(' ')[0])
-    ).slice(0, 6);
+    const currentItems = cart?.items || [];
+    const cartIds = new Set(currentItems.map(item => item.variant_id));
+    const cartTitles = new Set(currentItems.map(item => item.title.split(' ')[0].toLowerCase())); 
+    return recommended
+      .filter(p => !cartIds.has(p.id) && !cartTitles.has(p.title.split(' ')[0].toLowerCase()))
+      .slice(0, 6);
   }, [cart, recommended]);
 
   const total = useMemo(() => 
@@ -103,11 +87,12 @@ export default function CartPage() {
   [cart]);
 
   const updateQty = async (vId: string, qty: number) => {
-    if (qty < 0) return;
+    if (qty < 0 || loadingId) return;
     setLoadingId(vId);
     try {
       const res = await authedFetch("/api/cart/items", {
         method: "PATCH",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ variantId: vId, quantity: qty }),
       });
       if (res.ok) await loadCart();
@@ -116,14 +101,23 @@ export default function CartPage() {
     }
   };
 
+  // ТА САМАЯ ФУНКЦИЯ, КОТОРУЮ МЫ ПОТЕРЯЛИ + АНИМАЦИЯ
   const quickAdd = async (productId: string) => {
+    if (loadingId) return;
     setLoadingId(productId);
     try {
       const res = await authedFetch("/api/cart/items", {
         method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ variantId: productId, quantity: 1 }),
       });
-      if (res.ok) await loadCart();
+      if (res.ok) {
+        setAddedId(productId);
+        await loadCart();
+        setTimeout(() => setAddedId(null), 1500); // Сбрасываем иконку "Галочки"
+      }
+    } catch (e) {
+      console.error("Quick add failed", e);
     } finally {
       setLoadingId(null);
     }
@@ -131,8 +125,8 @@ export default function CartPage() {
 
   if (!cart) {
     return (
-      <div className="flex min-h-[60vh] items-center justify-center">
-        <Loader2 className="animate-spin text-gray-200" size={40} />
+      <div className="flex min-h-[70vh] items-center justify-center">
+        <Loader2 className="animate-spin text-gray-900" size={32} />
       </div>
     );
   }
@@ -140,60 +134,63 @@ export default function CartPage() {
   const items = cart.items || [];
 
   return (
-    <main className="mx-auto max-w-[1200px] px-6 py-12 md:py-20 selection:bg-black selection:text-white">
-      <header className="mb-12">
-        <motion.div initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }}>
-          <h1 className="text-[40px] font-semibold tracking-tight text-gray-900 md:text-[48px]">
-            Корзина
-          </h1>
-          <p className="mt-2 text-[17px] text-gray-500">
-            {items.length === 0 ? "Ваша корзина пуста" : `${items.length} предмета в списке`}
-          </p>
+    <main className="mx-auto max-w-[1680px] px-6 py-12 md:px-10 md:py-20 lg:px-12 selection:bg-black selection:text-white">
+      <header className="mb-16">
+        <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }}>
+          <h1 className="text-5xl font-bold tracking-tight text-gray-900 md:text-6xl">Корзина</h1>
+          <div className="mt-4 flex items-center gap-2">
+            <span className="h-2 w-2 rounded-full bg-emerald-500" />
+            <p className="text-lg font-medium text-gray-500">
+              {items.length === 0 ? "Пусто" : `${items.length} товара в списке`}
+            </p>
+          </div>
         </motion.div>
       </header>
 
       <AnimatePresence>
         {msg && (
-          <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }} className="mb-8 overflow-hidden">
-            <div className="flex items-center justify-between rounded-2xl bg-amber-50 p-4 border border-amber-100">
-              <div className="flex items-center gap-3 text-sm text-amber-800">
-                <AlertCircle size={18} />
-                {msg}
+          <motion.div initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, scale: 0.95 }} className="mb-10">
+            <div className="flex items-center justify-between rounded-[24px] bg-amber-50/50 p-5 border border-amber-100/50 backdrop-blur-sm">
+              <div className="flex items-center gap-3 text-amber-900 font-medium text-sm md:text-base">
+                <AlertCircle size={20} className="shrink-0" /> {msg}
               </div>
-              {msg.includes("Войдите") && <Link href="/auth" className="text-sm font-bold text-amber-900 underline">Войти</Link>}
+              {msg.includes("Войдите") && (
+                <Link href="/auth" className="rounded-full bg-amber-900 px-5 py-2 text-xs md:text-sm font-bold text-white transition-transform hover:scale-105 active:scale-95">
+                  Войти
+                </Link>
+              )}
             </div>
           </motion.div>
         )}
       </AnimatePresence>
 
-      <div className="grid gap-12 lg:grid-cols-12">
-        <section className="lg:col-span-8">
+      <div className="grid gap-12 lg:grid-cols-[1fr_420px] xl:grid-cols-[1fr_460px]">
+  <section>
           {items.length === 0 ? (
-            <div className="rounded-[40px] border border-dashed border-gray-200 bg-white py-24 text-center">
-              <ShoppingBag className="mx-auto mb-4 text-gray-200" size={48} />
-              <Link href="/catalog">
-                <Button variant="secondary" className="!rounded-full px-8">Перейти в каталог</Button>
-              </Link>
+            <div className="flex flex-col items-center justify-center rounded-[48px] border-2 border-dashed border-gray-100 bg-gray-50/30 py-32 text-center">
+              <div className="mb-6 rounded-full bg-white p-6 shadow-sm"><ShoppingBag className="text-gray-300" size={40} /></div>
+              <h2 className="mb-8 text-2xl font-bold text-gray-900">Пока здесь ничего нет</h2>
+              <Link href="/catalog"><Button variant="secondary" className="!rounded-full px-10 h-14 font-bold border-2">Начать покупки</Button></Link>
             </div>
           ) : (
-            <motion.div variants={containerVariants} initial="hidden" animate="show" className="space-y-4">
-              <AnimatePresence mode="popLayout">
+            <motion.div variants={containerVariants} initial="hidden" animate="show" className="space-y-6">
+              <AnimatePresence mode="popLayout" initial={false}>
                 {items.map((item) => (
-                  <motion.article key={item.variant_id} variants={itemVariants} layout className="group relative flex items-center gap-4 rounded-[28px] border border-gray-100 bg-white p-4 md:p-6 transition-all hover:shadow-lg hover:shadow-gray-100">
-                    <img src={item.image_url || ""} alt="" className="h-24 w-24 rounded-[20px] bg-gray-50 object-cover" />
-                    <div className="flex-1">
-                      <h3 className="text-lg font-semibold text-gray-900">{item.title}</h3>
-                      <p className="text-sm text-gray-500">{item.color}</p>
-                      <p className="mt-2 text-lg font-bold">{formatPrice(item.price_kzt)}</p>
+                  <motion.article key={item.variant_id} variants={itemVariants} layout className="group relative flex items-center gap-7 rounded-[40px] border border-gray-100 bg-white p-7 transition-all hover:border-gray-200 hover:shadow-2xl hover:shadow-gray-200/50">
+                    <div className="h-32 w-32 md:h-36 md:w-36 shrink-0 overflow-hidden rounded-[26px] bg-gray-50">
+                      <img src={item.image_url || ""} alt="" className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-110" />
                     </div>
-                    <div className="flex items-center gap-1 rounded-full border border-gray-100 bg-gray-50 p-1">
-                      <button onClick={() => updateQty(item.variant_id, item.quantity - 1)} disabled={loadingId === item.variant_id} className="h-9 w-9 flex items-center justify-center rounded-full hover:bg-white transition-colors">
+                    <div className="flex flex-1 flex-col justify-center">
+                     <h3 className="text-2xl font-black text-gray-900 line-clamp-1">{item.title}</h3>
+<p className="text-[15px] font-semibold text-gray-400">{item.color}</p>
+<p className="mt-3 text-2xl font-black text-gray-900 tracking-tight">{formatPrice(item.price_kzt)}</p>
+                    </div>
+                    <div className="flex items-center gap-2.5 rounded-3xl bg-gray-50 p-3 border border-gray-100">
+                      <button onClick={() => updateQty(item.variant_id, item.quantity - 1)} disabled={!!loadingId} className="h-10 w-10 flex items-center justify-center rounded-xl bg-white shadow-sm hover:bg-gray-900 hover:text-white transition-all disabled:opacity-50">
                         {item.quantity <= 1 ? <Trash2 size={16} className="text-red-500" /> : <Minus size={16} />}
                       </button>
-                      <span className="w-6 text-center text-sm font-bold">
-                        {loadingId === item.variant_id ? <Loader2 size={12} className="animate-spin mx-auto" /> : item.quantity}
-                      </span>
-                      <button onClick={() => updateQty(item.variant_id, item.quantity + 1)} disabled={loadingId === item.variant_id} className="h-9 w-9 flex items-center justify-center rounded-full hover:bg-white transition-colors">
+                      <span className="min-w-[24px] text-center font-bold tabular-nums">{loadingId === item.variant_id ? <Loader2 size={14} className="animate-spin mx-auto" /> : item.quantity}</span>
+                      <button onClick={() => updateQty(item.variant_id, item.quantity + 1)} disabled={!!loadingId} className="h-10 w-10 flex items-center justify-center rounded-xl bg-white shadow-sm hover:bg-gray-900 hover:text-white transition-all disabled:opacity-50">
                         <Plus size={16} />
                       </button>
                     </div>
@@ -204,25 +201,19 @@ export default function CartPage() {
           )}
         </section>
 
-        <aside className="lg:col-span-4">
-          <div className="sticky top-24 rounded-[32px] border border-gray-100 bg-white p-8 shadow-sm">
-            <h2 className="text-xl font-bold mb-6">Ваш заказ</h2>
-            <div className="space-y-3 mb-6">
-              <div className="flex justify-between text-gray-500">
-                <span>Товары</span>
-                <span>{formatPrice(total)}</span>
-              </div>
-              <div className="flex justify-between text-emerald-600 font-medium">
-                <span>Доставка</span>
-                <span>Бесплатно</span>
-              </div>
+        <aside>
+          <div className="sticky top-24 rounded-[44px] border border-gray-100 bg-white p-10 xl:p-12 shadow-2xl shadow-gray-200/50">
+            <h2 className="text-3xl font-black mb-8">Резюме</h2>
+            <div className="space-y-4 mb-8">
+              <div className="flex justify-between text-[17px]"><span className="text-gray-400 font-medium">Сумма</span><span className="font-bold">{formatPrice(total)}</span></div>
+              <div className="flex justify-between text-[17px]"><span className="text-gray-400 font-medium">Доставка</span><span className="text-emerald-500 font-bold uppercase text-xs tracking-widest">Бесплатно</span></div>
             </div>
-            <div className="pt-6 border-t border-gray-50 flex items-end justify-between mb-8">
-              <span className="font-semibold text-gray-900">Итого</span>
-              <span className="text-3xl font-bold tracking-tight">{formatPrice(total)}</span>
+            <div className="pt-8 border-t border-gray-50 flex items-end justify-between mb-10">
+              <span className="font-bold text-gray-400">Итого</span>
+              <span className="text-4xl font-black tracking-tighter tabular-nums">{formatPrice(total)}</span>
             </div>
-            <Link href="/checkout" className={items.length === 0 ? "pointer-events-none" : ""}>
-              <Button className="h-14 w-full !rounded-2xl bg-black text-white" rightIcon={<ArrowRight size={20} />} disabled={items.length === 0}>
+            <Link href="/checkout" className={items.length === 0 ? "pointer-events-none" : "block group"}>
+              <Button className="h-16 w-full !rounded-[22px] bg-black text-white hover:bg-gray-800 transition-all group-active:scale-[0.98]" rightIcon={<ArrowRight size={22} className="group-hover:translate-x-1 transition-transform" />} disabled={items.length === 0}>
                 Оформить заказ
               </Button>
             </Link>
@@ -230,35 +221,39 @@ export default function CartPage() {
         </aside>
       </div>
 
-      {/* РЕКОМЕНДАЦИИ С ГОРИЗОНТАЛЬНЫМ СКРОЛЛОМ */}
       {!isRecLoading && filteredRecs.length > 0 && (
-        <section className="mt-24 pt-20 border-t border-gray-100">
-          <div className="mb-8 flex items-center gap-2 text-blue-600">
-            <Sparkles size={20} />
-            <h2 className="text-3xl font-semibold tracking-tight text-gray-900">Часто покупают вместе</h2>
+        <section className="mt-32 border-t border-gray-100 pt-24">
+          <div className="mb-12 flex items-center gap-3">
+            <div className="rounded-full bg-blue-50 p-2 text-blue-600"><Sparkles size={24} fill="currentColor" className="opacity-20" /></div>
+            <h2 className="text-4xl font-bold tracking-tight text-gray-900">Добавьте к заказу</h2>
           </div>
-
-          <div className="hide-scrollbar -mx-6 flex gap-6 overflow-x-auto px-6 pb-8 snap-x snap-mandatory">
+          <div className="hide-scrollbar -mx-6 flex gap-8 overflow-x-auto px-6 pb-12 snap-x snap-mandatory">
             {filteredRecs.map((product) => (
-              <motion.div key={product.id} className="w-[260px] flex-shrink-0 snap-start group">
-                <div className="relative mb-4 aspect-square overflow-hidden rounded-[30px] bg-gray-50">
-                  <img src={product.image_url} alt={product.title} className="h-full w-full object-cover group-hover:scale-105 transition-transform duration-500" />
-                  <button 
+              <motion.div key={product.id} whileHover={{ y: -8 }} className="w-[280px] flex-shrink-0 snap-start group bg-white p-4 rounded-[36px] border border-gray-50 transition-all hover:shadow-2xl hover:shadow-gray-200/60">
+                <div className="relative mb-5 aspect-square overflow-hidden rounded-[28px] bg-gray-50">
+                  <img src={product.image_url} alt={product.title} className="h-full w-full object-cover" />
+                  <motion.button 
                     onClick={() => quickAdd(product.id)}
-                    disabled={loadingId === product.id}
-                    className="absolute bottom-4 right-4 flex h-11 w-11 items-center justify-center rounded-full bg-white text-black shadow-xl hover:scale-110 active:scale-95 transition-all opacity-0 translate-y-2 group-hover:opacity-100 group-hover:translate-y-0"
+                    disabled={!!loadingId}
+                    animate={addedId === product.id ? { scale: [1, 1.2, 1], rotate: [0, 10, -10, 0] } : {}}
+                    className={`absolute bottom-4 right-4 flex h-14 w-14 items-center justify-center rounded-2xl shadow-2xl transition-all active:scale-90 disabled:bg-gray-200 ${
+                      addedId === product.id ? "bg-emerald-500 text-white opacity-100" : "bg-black text-white opacity-0 translate-y-4 group-hover:opacity-100 group-hover:translate-y-0"
+                    }`}
                   >
-                    {loadingId === product.id ? <Loader2 size={18} className="animate-spin" /> : <Plus size={22} />}
-                  </button>
+                    {loadingId === product.id ? <Loader2 size={20} className="animate-spin" /> : 
+                     addedId === product.id ? <Check size={24} strokeWidth={3} /> : <Plus size={24} />}
+                  </motion.button>
                 </div>
-                <h4 className="font-semibold text-gray-900 truncate px-1">{product.title}</h4>
-                <p className="mt-1 text-[17px] font-medium text-gray-500 px-1">{formatPrice(product.price_kzt)}</p>
+                <div className="px-2">
+                  <h4 className="text-lg font-bold text-gray-900 truncate">{product.title}</h4>
+                  <p className="mt-1 text-xl font-black text-gray-400">{formatPrice(product.price_kzt)}</p>
+                </div>
               </motion.div>
             ))}
           </div>
         </section>
       )}
-
+      <RecommendedProducts onAdded={() => loadCart?.()} limit={6} />
       <style jsx global>{`
         .hide-scrollbar::-webkit-scrollbar { display: none; }
         .hide-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
