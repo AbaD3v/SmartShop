@@ -1,3 +1,4 @@
+// src/pages/api/favorites/products.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { requireUser } from "@/lib/api-auth";
@@ -5,48 +6,56 @@ import type { CatalogVariant } from "@/lib/types";
 
 type Row = { variant_id: string };
 
-function normalizeCatalogResponse(json: any): CatalogVariant[] {
-  const arr = Array.isArray(json) ? json : json?.data || json?.items || [];
-  return arr as CatalogVariant[];
-}
-
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-
-  if (req.method !== "GET")
+  if (req.method !== "GET") {
     return res.status(405).json({ error: "Method not allowed" });
+  }
 
   const auth = await requireUser(req, res);
   if (!auth) return;
 
-  const admin = getSupabaseAdmin();
+  try {
+    const admin = getSupabaseAdmin();
 
-  const { data, error } = await admin
-    .from("favorites")
-    .select("variant_id")
-    .eq("user_id", auth.user.id);
+    // 1) Получаем variant_id из favorites
+    const { data: favRows, error: favErr } = await admin
+      .from("favorites")
+      .select("variant_id")
+      .eq("user_id", auth.user.id);
 
-  if (error)
-    return res.status(500).json({ error: error.message });
+    if (favErr) return res.status(500).json({ error: favErr.message });
 
-  const ids = ((data ?? []) as Row[]).map((x) => x.variant_id);
+    const ids = ((favRows ?? []) as Row[])
+      .map((x) => String(x.variant_id))
+      .filter(Boolean);
 
-  if (!ids.length)
-    return res.json([]);
+    if (!ids.length) return res.status(200).json([]);
 
-  const base =
-    process.env.NEXT_PUBLIC_SITE_URL ||
-    `http://${req.headers.host}`;
+    // 2) Берём товары напрямую из БД по этим ids
+    // ✅ лучше всего: v_catalog_variants (если она у тебя есть)
+    const { data: products, error: prodErr } = await admin
+      .from("v_catalog_variants")
+      .select("*")
+      .in("variant_id", ids);
 
-  const r = await fetch(`${base}/api/catalog/products`);
-  const json = await r.json();
+    if (prodErr) {
+      // если у тебя нет v_catalog_variants — покажем понятную ошибку
+      return res.status(500).json({
+        error:
+          `Cannot load products from v_catalog_variants: ${prodErr.message}. ` +
+          `Replace table/view name with yours (e.g. product_variants / catalog view).`,
+      });
+    }
 
-  const products = normalizeCatalogResponse(json);
+    // 3) Сохраняем порядок как в избранных (опционально)
+    const order = new Map(ids.map((id, i) => [id, i]));
+    const sorted = (products ?? []).slice().sort((a: any, b: any) => {
+      return (order.get(String(a.variant_id)) ?? 0) - (order.get(String(b.variant_id)) ?? 0);
+    });
 
-  const set = new Set(ids);
-
-  const favorites = products.filter(
-    (p) => set.has(p.variant_id)
-  );
-
-  return res.json(favorites);
+    return res.status(200).json(sorted as CatalogVariant[]);
+  } catch (e: any) {
+    console.error("favorites/products fatal:", e);
+    return res.status(500).json({ error: e?.message || "Internal error" });
+  }
 }
